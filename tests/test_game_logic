@@ -1,0 +1,262 @@
+"""game_logic 모듈 테스트"""
+
+import unittest
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from entities import Word, GameState, WordSpawner
+from game_logic import process_shout, try_submit_word, update_words, spawn_word_if_ready
+from audio import AudioManager
+from config import PLAYER_X, SHOUT_PUSH_BASE
+
+class MockAudioManager(AudioManager):
+    """테스트용 AudioManager (실제 마이크 불필요)"""
+
+    def __init__(self, threshold=15.0, volume=0.0):
+        super().__init__(threshold=threshold)
+        self.mic_volume = volume
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+def make_word(**kwargs):
+    """테스트용 Word 생성 헬퍼"""
+    defaults = dict(
+        text="TEST", x=500.0, base_y=200,
+        amp=0, freq=400.0, speed=2.0, is_heavy=False
+    )
+    defaults.update(kwargs)
+    return Word(**defaults)
+
+# =============================================
+# process_shout 테스트
+# =============================================
+class TestProcessShout(unittest.TestCase):
+
+    def test_no_shout_no_push(self):
+        """소리가 작으면 단어가 밀리지 않음"""
+        state = GameState()
+        w = make_word(x=400.0)
+        state.active_words.append(w)
+        audio = MockAudioManager(volume=5.0)  # threshold(15) 미만
+        process_shout(state, audio)
+        self.assertAlmostEqual(w.x, 400.0)
+
+    def test_shout_pushes_normal_word(self):
+        """소리가 크면 일반 단어가 밀림"""
+        state = GameState()
+        w = make_word(x=400.0, is_heavy=False)
+        state.active_words.append(w)
+        audio = MockAudioManager(volume=20.0)  # threshold(15) 초과
+        process_shout(state, audio)
+        expected_x = 400.0 + SHOUT_PUSH_BASE + state.level
+        self.assertAlmostEqual(w.x, expected_x)
+
+    def test_shout_does_not_push_heavy_word(self):
+        """소리가 커도 무거운 단어는 밀리지 않음"""
+        state = GameState()
+        w = make_word(x=400.0, is_heavy=True)
+        state.active_words.append(w)
+        audio = MockAudioManager(volume=20.0)
+        process_shout(state, audio)
+        self.assertAlmostEqual(w.x, 400.0)
+
+    def test_shout_push_amount_scales_with_level(self):
+        """레벨이 높을수록 밀어내는 양이 증가"""
+        state = GameState()
+        state.level = 5
+        w = make_word(x=400.0)
+        state.active_words.append(w)
+        audio = MockAudioManager(volume=20.0)
+        process_shout(state, audio)
+        expected = 400.0 + SHOUT_PUSH_BASE + 5
+        self.assertAlmostEqual(w.x, expected)
+
+    def test_shout_pushes_multiple_words(self):
+        """여러 단어가 동시에 밀리는지 확인"""
+        state = GameState()
+        w1 = make_word(x=300.0, is_heavy=False)
+        w2 = make_word(x=400.0, is_heavy=False)
+        w3 = make_word(x=500.0, is_heavy=True)
+        state.active_words.extend([w1, w2, w3])
+        audio = MockAudioManager(volume=20.0)
+        process_shout(state, audio)
+
+        push = SHOUT_PUSH_BASE + state.level
+        self.assertAlmostEqual(w1.x, 300.0 + push)
+        self.assertAlmostEqual(w2.x, 400.0 + push)
+        self.assertAlmostEqual(w3.x, 500.0)  # heavy는 안 밀림
+
+# =============================================
+# try_submit_word 테스트
+# =============================================
+class TestTrySubmitWord(unittest.TestCase):
+
+    def test_correct_word_removed_and_scored(self):
+        """올바른 단어 입력 시 제거 및 점수 획득"""
+        state = GameState()
+        w = make_word(text="HELLO")
+        state.active_words.append(w)
+        state.current_input = "hello"
+
+        result = try_submit_word(state, current_time=1000)
+        self.assertTrue(result)
+        self.assertEqual(len(state.active_words), 0)
+        self.assertEqual(state.score, 100)  # level  * 00
+        self.assertEqual(state.words_cleared, 1)
+        self.assertEqual(state.current_input, "")
+
+    def test_wrong_word_not_removed(self):
+        """잘못된 단어 입력 시 아무것도 제거되지 않음"""
+        state = GameState()
+        w = make_word(text="HELLO")
+        state.active_words.append(w)
+        state.current_input = "WORLD"
+
+        result = try_submit_word(state, current_time=1000)
+        self.assertFalse(result)
+        self.assertEqual(len(state.active_words), 1)
+        self.assertEqual(state.score, 0)
+        self.assertEqual(state.current_input, "")
+
+    def test_submit_clears_input_on_miss(self):
+        """불일치 시에도 입력이 초기화됨"""
+        state = GameState()
+        state.current_input = "XYZ"
+        try_submit_word(state, current_time=0)
+        self.assertEqual(state.current_input, "")
+
+    def test_submit_triggers_level_up(self):
+        """제출 후 레벨업 조건 충족 시 레벨업"""
+        state = GameState()
+        state.words_cleared = 9  # add_score에서 +1 되어 10이 됨
+        w = make_word(text="CODE")
+        state.active_words.append(w)
+        state.current_input = "CODE"
+
+        try_submit_word(state, current_time=5000)
+        self.assertEqual(state.level, 2)
+        self.assertEqual(state.level_up_time, 5000)
+
+    def test_submit_sentence_with_spaces(self):
+        """띄어쓰기가 있는 문장도 매칭 가능"""
+        state = GameState()
+        w = make_word(text="NEVER GIVE UP")
+        state.active_words.append(w)
+        state.current_input = "never give up"
+
+        result = try_submit_word(state, current_time=0)
+        self.assertTrue(result)
+        self.assertEqual(len(state.active_words), 0)
+
+    def test_only_first_match_removed(self):
+        """동일 텍스트 단어가 여러 개면 첫 번째만 제거"""
+        state = GameState()
+        w1 = make_word(text="SAME")
+        w2 = make_word(text="SAME")
+        state.active_words.extend([w1, w2])
+        state.current_input = "SAME"
+
+        try_submit_word(state, current_time=0)
+        self.assertEqual(len(state.active_words), 1)
+
+# =============================================
+# update_words 테스트
+# =============================================
+class TestUpdateWords(unittest.TestCase):
+
+    def test_words_move_left(self):
+        """업데이트 시 단어가 왼쪽으로 이동"""
+        state = GameState()
+        w = make_word(x=500.0, speed=5.0, amp=0)
+        state.active_words.append(w)
+
+        update_words(state, current_time=0)
+        self.assertAlmostEqual(w.x, 495.0)
+
+    def test_word_reaching_defense_removes_and_damages(self):
+        """단어가 방어선에 도달하면 제거 + 목숨 감소"""
+        state = GameState()
+        w = make_word(x=PLAYER_X - 1, speed=0.0, amp=0)  # 이미 방어선 왼쪽
+        state.active_words.append(w)
+
+        update_words(state, current_time=0)
+        self.assertEqual(len(state.active_words), 0)
+        self.assertEqual(state.lives, 2)
+
+    def test_game_over_when_all_lives_lost(self):
+        """모든 목숨을 잃으면 game_over"""
+        state = GameState()
+        for _ in range(3):
+            w = make_word(x=0.0, speed=0.0, amp=0)
+            state.active_words.append(w)
+
+        update_words(state, current_time=0)
+        self.assertTrue(state.game_over)
+        self.assertEqual(state.lives, 0)
+
+    def test_multiple_words_reaching_defense(self):
+        """여러 단어가 동시에 도달해도 올바르게 처리"""
+        state = GameState()
+        w1 = make_word(x=10.0, speed=0.0, amp=0)
+        w2 = make_word(x=500.0, speed=0.0, amp=0)
+        w3 = make_word(x=20.0, speed=0.0, amp=0)
+        state.active_words.extend([w1, w2, w3])
+
+        update_words(state, current_time=0)
+        # w1, w3은 방어선 통과, w2는 남아있어야 함
+        self.assertEqual(len(state.active_words), 1)
+        self.assertEqual(state.lives, 1)
+
+# =============================================
+# spawn_word_if_ready 테스트
+# =============================================
+class TestSpawnWordIfReady(unittest.TestCase):
+
+    def test_no_spawn_before_delay(self):
+        """딜레이 미경과 시 스폰하지 않음"""
+        state = GameState()
+        spawner = WordSpawner()
+        last_time = 1000
+        current_time = 1500  # delay(level1) = 1800ms이므로 아직 안 됨
+
+        new_last = spawn_word_if_ready(state, spawner, current_time, last_time)
+        self.assertEqual(len(state.active_words), 0)
+        self.assertEqual(new_last, last_time)
+
+    def test_spawn_after_delay(self):
+        """딜레이 경과 시 단어가 스폰됨"""
+        state = GameState()
+        spawner = WordSpawner()
+        last_time = 0
+        current_time = 3000  # 충분히 큰 시간
+
+        new_last = spawn_word_if_ready(state, spawner, current_time, last_time)
+        self.assertEqual(len(state.active_words), 1)
+        self.assertEqual(new_last, current_time)
+
+    def test_spawn_returns_updated_time(self):
+        """스폰 시 반환된 시간이 current_time인지 확인"""
+        state = GameState()
+        spawner = WordSpawner()
+        new_last = spawn_word_if_ready(state, spawner, 10000, 0)
+        self.assertEqual(new_last, 10000)
+
+    def test_higher_level_spawns_faster(self):
+        """높은 레벨에서 더 짧은 딜레이에 스폰"""
+        state = GameState()
+        state.level = 10
+        spawner = WordSpawner()
+
+        # level 10이면 delay = max(600, 2000 - 2000) = 600ms
+        # 700ms 경과 시 스폰 가능
+        new_last = spawn_word_if_ready(state, spawner, 700, 0)
+        self.assertEqual(len(state.active_words), 1)
+
+if __name__ == '__main__':
+    unittest.main()

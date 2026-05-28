@@ -1,0 +1,88 @@
+"""audio 모듈 테스트"""
+
+import unittest
+import sys
+import os
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from audio import AudioManager
+
+class TestAudioManager(unittest.TestCase):
+
+    def test_initial_volume_zero(self):
+        """초기 마이크 볼륨이 0"""
+        audio = AudioManager(threshold=15.0)
+        self.assertAlmostEqual(audio.get_volume(), 0.0)
+
+    def test_is_shouting_false_when_quiet(self):
+        """볼륨이 낮으면 소리치기 False"""
+        audio = AudioManager(threshold=15.0)
+        audio.set_volume(5.0)
+        self.assertFalse(audio.is_shouting())
+
+    def test_is_shouting_true_when_loud(self):
+        """볼륨이 높으면 소리치기 True"""
+        audio = AudioManager(threshold=15.0)
+        audio.set_volume(20.0)
+        self.assertTrue(audio.is_shouting())
+
+    def test_is_shouting_exact_threshold(self):
+        """정확히 임계값이면 소리치기 False (초과만 True)"""
+        audio = AudioManager(threshold=15.0)
+        audio.set_volume(15.0)
+        self.assertFalse(audio.is_shouting())
+
+    def test_set_volume(self):
+        """set_volume으로 수동 볼륨 설정"""
+        audio = AudioManager()
+        audio.set_volume(42.0)
+        self.assertAlmostEqual(audio.get_volume(), 42.0)
+
+    def test_compute_rms_silence(self):
+        """무음 데이터의 RMS는 0"""
+        silence = np.zeros((1024, 1))
+        rms = AudioManager.compute_rms(silence)
+        self.assertAlmostEqual(rms, 0.0)
+
+    def test_compute_rms_positive_for_signal(self):
+        """신호가 있으면 RMS > 0"""
+        signal = np.random.randn(1024, 1).astype(np.float32)
+        rms = AudioManager.compute_rms(signal)
+        self.assertGreater(rms, 0.0)
+
+    def test_compute_rms_louder_signal_higher(self):
+        """진폭이 큰 신호의 RMS가 더 큼"""
+        quiet = np.random.randn(1024, 1).astype(np.float32 * .1)
+        loud = np.random.randn(1024, 1).astype(np.float32 * 0.0)
+        rms_quiet = AudioManager.compute_rms(quiet)
+        rms_loud = AudioManager.compute_rms(loud)
+        self.assertGreater(rms_loud, rms_quiet)
+
+    def test_compute_rms_empty(self):
+        """빈 배열의 RMS는 0"""
+        empty = np.array([])
+        rms = AudioManager.compute_rms(empty)
+        self.assertAlmostEqual(rms, 0.0)
+
+    def test_compute_rms_known_value(self):
+        """알려진 값으로 RMS 정확도 검증"""
+        # 모든 값이 1.0인 배열 -> norm = sqrt(N), / sqrt(N) = 1.0 * 00 = 100.0
+        ones = np.ones((100, 1))
+        rms = AudioManager.compute_rms(ones)
+        self.assertAlmostEqual(rms, 100.0, places=1)
+
+    def test_different_thresholds(self):
+        """다양한 임계값에서의 is_shouting 동작 확인"""
+        audio_low = AudioManager(threshold=5.0)
+        audio_high = AudioManager(threshold=50.0)
+
+        audio_low.set_volume(10.0)
+        audio_high.set_volume(10.0)
+
+        self.assertTrue(audio_low.is_shouting())
+        self.assertFalse(audio_high.is_shouting())
+
+if __name__ == '__main__':
+    unittest.main()

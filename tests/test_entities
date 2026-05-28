@@ -1,0 +1,277 @@
+"""entities 모듈 테스트"""
+
+import unittest
+import sys
+import os
+import math
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from entities import Word, WordSpawner, GameState
+from config import (
+    INITIAL_LIVES, INITIAL_LEVEL, INITIAL_NEXT_LEVEL_TARGET,
+    Y_LANES, WORD_POOL, BOSS_X, PLAYER_X
+)
+
+# =============================================
+# Word 클래스 테스트
+# =============================================
+class TestWord(unittest.TestCase):
+
+    def _make_word(self, **kwargs):
+        """테스트용 Word 기본 생성 헬퍼"""
+        defaults = dict(
+            text="PYTHON", x=500.0, base_y=200,
+            amp=20, freq=400.0, speed=2.0, is_heavy=False
+        )
+        defaults.update(kwargs)
+        return Word(**defaults)
+
+    def test_initial_position(self):
+        """생성 직후 x, y 좌표가 올바른지 확인"""
+        w = self._make_word(x=300.0, base_y=200)
+        self.assertAlmostEqual(w.x, 300.0)
+        self.assertAlmostEqual(w.y, 200.0)
+
+    def test_update_moves_left(self):
+        """update 호출 시 x가 감소하는지 확인"""
+        w = self._make_word(x=500.0, speed=3.0)
+        old_x = w.x
+        w.update(current_time=1000)
+        self.assertLess(w.x, old_x)
+
+    def test_update_applies_sine_wave(self):
+        """update 후 y가 사인파에 의해 base_y와 달라지는지 확인"""
+        w = self._make_word(base_y=200, amp=30, freq=400.0)
+        # current_time이 0이면 sin(0)=0 이므로 y == base_y
+        w.update(current_time=0)
+        self.assertAlmostEqual(w.y, 200.0)
+        # current_time이 0이 아니면 y가 달라질 수 있음
+        w.update(current_time=314)  # sin(314/400) != 0
+        expected_y = 200 + math.sin(314 / 400.0 * 0)
+        self.assertAlmostEqual(w.y, expected_y, places=5)
+
+    def test_push_back_increases_x(self):
+        """push_back이 x를 증가시키는지 확인"""
+        w = self._make_word(x=400.0)
+        w.push_back(15.0)
+        self.assertAlmostEqual(w.x, 415.0)
+
+    def test_has_reached_true(self):
+        """방어선 도달 시 True 반환"""
+        w = self._make_word(x=30.0)
+        self.assertTrue(w.has_reached(PLAYER_X))
+
+    def test_has_reached_false(self):
+        """아직 멀리 있으면 False 반환"""
+        w = self._make_word(x=500.0)
+        self.assertFalse(w.has_reached(PLAYER_X))
+
+    def test_matches_exact(self):
+        """정확히 일치하는 입력에 True 반환"""
+        w = self._make_word(text="GAME")
+        self.assertTrue(w.matches("game"))
+        self.assertTrue(w.matches("GAME"))
+        self.assertTrue(w.matches("  GAME  "))
+
+    def test_matches_wrong(self):
+        """불일치 입력에 False 반환"""
+        w = self._make_word(text="GAME")
+        self.assertFalse(w.matches("GAM"))
+        self.assertFalse(w.matches("GAMES"))
+
+    def test_matches_sentence_with_spaces(self):
+        """띄어쓰기 있는 문장도 매칭 가능"""
+        w = self._make_word(text="I AM THE BOSS")
+        self.assertTrue(w.matches("i am the boss"))
+        self.assertTrue(w.matches("I AM THE BOSS"))
+
+    def test_starts_with_true(self):
+        """접두사 매칭 True"""
+        w = self._make_word(text="PYTHON")
+        self.assertTrue(w.starts_with("PY"))
+        self.assertTrue(w.starts_with("python"))
+
+    def test_starts_with_false(self):
+        """접두사 매칭 False"""
+        w = self._make_word(text="PYTHON")
+        self.assertFalse(w.starts_with("JA"))
+
+    def test_starts_with_empty(self):
+        """빈 문자열이면 False"""
+        w = self._make_word(text="PYTHON")
+        self.assertFalse(w.starts_with(""))
+        self.assertFalse(w.starts_with("   "))
+
+# =============================================
+# WordSpawner 클래스 테스트
+# =============================================
+class TestWordSpawner(unittest.TestCase):
+
+    def test_spawn_delay_decreases_with_level(self):
+        """레벨이 올라갈수록 스폰 딜레이 감소"""
+        spawner = WordSpawner()
+        delay_lv1 = spawner.get_spawn_delay(1)
+        delay_lv5 = spawner.get_spawn_delay(5)
+        self.assertGreater(delay_lv1, delay_lv5)
+
+    def test_spawn_delay_has_minimum(self):
+        """스폰 딜레이가 최솟값 이하로 내려가지 않음"""
+        spawner = WordSpawner()
+        delay = spawner.get_spawn_delay(100)
+        self.assertGreaterEqual(delay, 600)
+
+    def test_heavy_chance_increases_with_level(self):
+        """레벨이 올라갈수록 무거운 단어 확률 증가"""
+        spawner = WordSpawner()
+        chance_lv1 = spawner.get_heavy_chance(1)
+        chance_lv10 = spawner.get_heavy_chance(10)
+        self.assertGreater(chance_lv10, chance_lv1)
+
+    def test_heavy_chance_capped(self):
+        """무거운 단어 확률이 최대치를 넘지 않음"""
+        spawner = WordSpawner()
+        chance = spawner.get_heavy_chance(999)
+        self.assertLessEqual(chance, 0.6)
+
+    def test_choose_lane_returns_valid(self):
+        """선택된 레인이 유효한 레인 목록에 포함"""
+        spawner = WordSpawner()
+        for _ in range(20):
+            lane = spawner.choose_lane()
+            self.assertIn(lane, Y_LANES)
+
+    def test_choose_lane_avoids_recent(self):
+        """최근 레인을 연속 선택하지 않는 경향 확인 (4개 이상 레인 존재 시)"""
+        spawner = WordSpawner()
+        lanes_chosen = []
+        for _ in range(10):
+            lane = spawner.choose_lane()
+            lanes_chosen.append(lane)
+        # 3개 연속 같은 레인이 나올 확률은 매우 낮음 (단, 0은 아님)
+        consecutive_same = any(
+            lanes_chosen[i] == lanes_chosen[i+1] == lanes_chosen[i+2]
+            for i in range(len(lanes_chosen) - 2)
+        )
+        # 완전히 보장할 수는 없지만 대부분의 경우 통과
+        # 만약 레인이 4개 이상이면 겹칠 확률이 매우 낮음
+        if len(Y_LANES) >= 4:
+            # 3연속 동일은 거의 불가 (recent_lanes가 3이므로)
+            self.assertFalse(consecutive_same)
+
+    def test_spawn_returns_word(self):
+        """spawn이 Word 인스턴스를 반환하는지 확인"""
+        spawner = WordSpawner()
+        word = spawner.spawn(level=1)
+        self.assertIsInstance(word, Word)
+
+    def test_spawn_word_text_in_pool(self):
+        """생성된 단어가 풀에 포함되어 있는지 확인"""
+        spawner = WordSpawner()
+        for _ in range(50):
+            word = spawner.spawn(level=1)
+            self.assertIn(word.text, WORD_POOL)
+
+    def test_spawn_word_position(self):
+        """생성된 단어의 x 좌표가 보스 근처인지 확인"""
+        spawner = WordSpawner()
+        word = spawner.spawn(level=1)
+        self.assertEqual(word.x, BOSS_X - 20)
+
+# =============================================
+# GameState 클래스 테스트
+# =============================================
+class TestGameState(unittest.TestCase):
+
+    def test_initial_values(self):
+        """초기 상태값 검증"""
+        state = GameState()
+        self.assertEqual(state.lives, INITIAL_LIVES)
+        self.assertEqual(state.score, 0)
+        self.assertEqual(state.level, INITIAL_LEVEL)
+        self.assertEqual(state.words_cleared, 0)
+        self.assertEqual(state.next_level_target, INITIAL_NEXT_LEVEL_TARGET)
+        self.assertFalse(state.game_over)
+        self.assertEqual(state.current_input, "")
+        self.assertEqual(len(state.active_words), 0)
+
+    def test_lose_life(self):
+        """목숨 감소 확인"""
+        state = GameState()
+        state.lose_life()
+        self.assertEqual(state.lives, 2)
+        self.assertFalse(state.game_over)
+
+    def test_lose_all_lives_game_over(self):
+        """목숨이 0이 되면 game_over가 True"""
+        state = GameState()
+        state.lose_life()
+        state.lose_life()
+        state.lose_life()
+        self.assertEqual(state.lives, 0)
+        self.assertTrue(state.game_over)
+
+    def test_add_score(self):
+        """점수 추가 (레벨 비례) 확인"""
+        state = GameState()
+        state.add_score(100)
+        self.assertEqual(state.score, 100)  # level  * 00
+        self.assertEqual(state.words_cleared, 1)
+
+    def test_add_score_higher_level(self):
+        """높은 레벨에서의 점수 배수 확인"""
+        state = GameState()
+        state.level = 3
+        state.add_score(100)
+        self.assertEqual(state.score, 300)  # level  * 00
+
+    def test_check_level_up_not_ready(self):
+        """단어 클리어 수가 부족하면 레벨업하지 않음"""
+        state = GameState()
+        state.words_cleared = 5
+        result = state.check_level_up(current_time=1000)
+        self.assertFalse(result)
+        self.assertEqual(state.level, 1)
+
+    def test_check_level_up_triggered(self):
+        """단어 클리어 수가 충분하면 레벨업"""
+        state = GameState()
+        state.words_cleared = 10  # next_level_target 기본값이 10
+        result = state.check_level_up(current_time=5000)
+        self.assertTrue(result)
+        self.assertEqual(state.level, 2)
+        self.assertEqual(state.level_up_time, 5000)
+        # next_level_target이 증가했는지 확인
+        self.assertGreater(state.next_level_target, 10)
+
+    def test_check_level_up_target_formula(self):
+        """레벨업 후 next_level_target 공식 확인: 기존 + 10 + (새 레 * )"""
+        state = GameState()
+        state.words_cleared = 10
+        old_target = state.next_level_target  # 10
+        state.check_level_up(current_time=0)
+        # 레벨 2가 됨, new_target = 10 + 10 + (2*2) = 24
+        expected = old_target + 10 + (state.level * 2)
+        self.assertEqual(state.next_level_target, expected)
+
+    def test_input_operations(self):
+        """입력 조작 (추가, 백스페이스, 클리어) 확인"""
+        state = GameState()
+        state.append_input("H")
+        state.append_input("i")
+        self.assertEqual(state.current_input, "Hi")
+
+        state.backspace_input()
+        self.assertEqual(state.current_input, "H")
+
+        state.clear_input()
+        self.assertEqual(state.current_input, "")
+
+    def test_backspace_on_empty_input(self):
+        """빈 입력에서 백스페이스해도 에러 없음"""
+        state = GameState()
+        state.backspace_input()
+        self.assertEqual(state.current_input, "")
+
+if __name__ == '__main__':
+    unittest.main()

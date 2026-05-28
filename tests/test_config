@@ -1,0 +1,59 @@
+"""config 모듈 상수 검증 테스트"""
+
+import unittest
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from config import (
+    SCREEN_WIDTH, SCREEN_HEIGHT, INITIAL_LIVES, SHOUT_THRESHOLD,
+    Y_LANES, WORD_POOL, HEAVY_CHANCE_MAX, SPAWN_DELAY_MIN,
+    BOSS_X, PLAYER_X
+)
+
+class TestConfig(unittest.TestCase):
+
+    def test_screen_dimensions_positive(self):
+        """화면 크기가 양수인지 확인"""
+        self.assertGreater(SCREEN_WIDTH, 0)
+        self.assertGreater(SCREEN_HEIGHT, 0)
+
+    def test_initial_lives(self):
+        """초기 목숨이 3인지 확인"""
+        self.assertEqual(INITIAL_LIVES, 3)
+
+    def test_shout_threshold_positive(self):
+        """소리치기 임계값이 양수인지 확인"""
+        self.assertGreater(SHOUT_THRESHOLD, 0)
+
+    def test_y_lanes_within_screen(self):
+        """모든 레인의 Y 좌표가 화면 범위 안인지 확인"""
+        for lane in Y_LANES:
+            self.assertGreater(lane, 0)
+            self.assertLess(lane, SCREEN_HEIGHT)
+
+    def test_word_pool_not_empty(self):
+        """단어 풀이 비어있지 않은지 확인"""
+        self.assertGreater(len(WORD_POOL), 0)
+
+    def test_all_words_uppercase(self):
+        """단어 풀의 모든 단어가 대문자인지 확인"""
+        for word in WORD_POOL:
+            self.assertEqual(word, word.upper())
+
+    def test_heavy_chance_max_valid(self):
+        """무거운 단어 최대 확률이 0~1 사이인지 확인"""
+        self.assertGreaterEqual(HEAVY_CHANCE_MAX, 0.0)
+        self.assertLessEqual(HEAVY_CHANCE_MAX, 1.0)
+
+    def test_boss_right_of_player(self):
+        """보스가 플레이어보다 오른쪽에 위치하는지 확인"""
+        self.assertGreater(BOSS_X, PLAYER_X)
+
+    def test_spawn_delay_min_positive(self):
+        """최소 스폰 딜레이가 양수인지 확인"""
+        self.assertGreater(SPAWN_DELAY_MIN, 0)
+
+if __name__ == '__main__':
+    unittest.main()
